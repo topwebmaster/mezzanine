@@ -2,35 +2,26 @@ from __future__ import absolute_import, division, unicode_literals
 from future.builtins import int, open, str
 
 from hashlib import md5
-from json import loads
 import os
 try:
-    from urllib.request import urlopen
-    from urllib.parse import urlencode, quote, unquote
+    from urllib.parse import quote, unquote
 except ImportError:
-    from urllib import urlopen, urlencode, quote, unquote
+    from urllib import quote, unquote
 
 from django.contrib import admin
 from django.contrib.auth import REDIRECT_FIELD_NAME
 from django.contrib.sites.models import Site
 from django.core.files import File
 from django.core.files.storage import default_storage
-from django.core.urlresolvers import reverse, NoReverseMatch
+from django.core.urlresolvers import reverse, resolve, NoReverseMatch
 from django.db.models import Model, get_model
 from django.template import (Context, Node, TextNode, Template,
     TemplateSyntaxError, TOKEN_TEXT, TOKEN_VAR, TOKEN_COMMENT, TOKEN_BLOCK)
 from django.template.defaultfilters import escape
 from django.template.loader import get_template
+from django.utils import translation
 from django.utils.html import strip_tags
 from django.utils.text import capfirst
-
-# Try to import PIL in either of the two ways it can end up installed.
-try:
-    from PIL import Image, ImageFile, ImageOps
-except ImportError:
-    import Image
-    import ImageFile
-    import ImageOps
 
 from mezzanine.conf import settings
 from mezzanine.core.fields import RichTextField
@@ -188,22 +179,11 @@ def ifinstalled(parser, token):
 @register.render_tag
 def set_short_url_for(context, token):
     """
-    Sets the ``short_url`` attribute of the given model using the
-    bit.ly credentials if they have been specified and saves it.
+    Sets the ``short_url`` attribute of the given model for share
+    links in the template.
     """
     obj = context[token.split_contents()[1]]
-    request = context["request"]
-    if getattr(obj, "short_url") is None:
-        obj.short_url = request.build_absolute_uri(request.path)
-        if context["settings"].BITLY_ACCESS_TOKEN:
-            url = "https://api-ssl.bit.ly/v3/shorten?%s" % urlencode({
-                "access_token": context["settings"].BITLY_ACCESS_TOKEN,
-                "uri": obj.short_url,
-            })
-            response = loads(urlopen(url).read())
-            if response["status_code"] == 200:
-                obj.short_url = response["data"]["url"]
-                obj.save()
+    obj.set_short_url()
     return ""
 
 
@@ -264,8 +244,11 @@ def search_form(context, search_model_names=None):
         search_model_names = search_model_names.split(" ")
     search_model_choices = []
     for model_name in search_model_names:
-        model = get_model(*model_name.split(".", 1))
-        if model:  # Might not be installed.
+        try:
+            model = get_model(*model_name.split(".", 1))
+        except LookupError:
+            pass
+        else:
             verbose_name = model._meta.verbose_name_plural.capitalize()
             search_model_choices.append((verbose_name, model_name))
     context["search_model_choices"] = sorted(search_model_choices)
@@ -273,14 +256,20 @@ def search_form(context, search_model_names=None):
 
 
 @register.simple_tag
-def thumbnail(image_url, width, height, quality=95, left=0.5, top=0.5):
+def thumbnail(image_url, width, height, quality=95, left=.5, top=.5,
+              padding=False, padding_color="#fff"):
     """
     Given the URL to an image, resizes the image using the given width and
     height on the first time it is requested, and returns the URL to the new
     resized image. if width or height are zero then original ratio is
     maintained.
     """
+
     if not image_url:
+        return ""
+    try:
+        from PIL import Image, ImageFile, ImageOps
+    except ImportError:
         return ""
 
     image_url = unquote(str(image_url)).split("?")[0]
@@ -290,18 +279,27 @@ def thumbnail(image_url, width, height, quality=95, left=0.5, top=0.5):
     image_prefix, image_ext = os.path.splitext(image_name)
     filetype = {".png": "PNG", ".gif": "GIF"}.get(image_ext, "JPEG")
     thumb_name = "%s-%sx%s" % (image_prefix, width, height)
-    if left != 0.5 or top != 0.5:
+    if left != .5 or top != .5:
         left = min(1, max(0, left))
         top = min(1, max(0, top))
         thumb_name = "%s-%sx%s" % (thumb_name, left, top)
+    thumb_name += "-padded-%s" % padding_color if padding else ""
     thumb_name = "%s%s" % (thumb_name, image_ext)
+
+    # `image_name` is used here for the directory path, as each image
+    # requires its own sub-directory using its own name - this is so
+    # we can consistently delete all thumbnails for an individual
+    # image, which is something we do in filebrowser when a new image
+    # is written, allowing us to purge any previously generated
+    # thumbnails that may match a new image name.
     thumb_dir = os.path.join(settings.MEDIA_ROOT, image_dir,
-                             settings.THUMBNAILS_DIR_NAME)
+                             settings.THUMBNAILS_DIR_NAME, image_name)
     if not os.path.exists(thumb_dir):
         os.makedirs(thumb_dir)
     thumb_path = os.path.join(thumb_dir, thumb_name)
-    thumb_url = "%s/%s" % (settings.THUMBNAILS_DIR_NAME,
-                           quote(thumb_name.encode("utf-8")))
+    thumb_url = "%s/%s/%s" % (settings.THUMBNAILS_DIR_NAME,
+                              quote(image_name.encode("utf-8")),
+                              quote(thumb_name.encode("utf-8")))
     image_url_path = os.path.dirname(image_url)
     if image_url_path:
         thumb_url = "%s/%s" % (image_url_path, thumb_url)
@@ -325,33 +323,58 @@ def thumbnail(image_url, width, height, quality=95, left=0.5, top=0.5):
     try:
         image = Image.open(f)
     except:
-        # Invalid image format
+        # Invalid image format.
         return image_url
 
     image_info = image.info
-    width = int(width)
-    height = int(height)
+    to_width = int(width)
+    to_height = int(height)
+    from_width = image.size[0]
+    from_height = image.size[1]
 
-    # If already right size, don't do anything.
-    if width == image.size[0] and height == image.size[1]:
-        return image_url
     # Set dimensions.
-    if width == 0:
-        width = image.size[0] * height // image.size[1]
-    elif height == 0:
-        height = image.size[1] * width // image.size[0]
+    if to_width == 0:
+        to_width = from_width * to_height // from_height
+    elif to_height == 0:
+        to_height = from_height * to_width // from_width
     if image.mode not in ("P", "L", "RGBA"):
-        image = image.convert("RGBA")
+        try:
+            image = image.convert("RGBA")
+        except:
+            return image_url
     # Required for progressive jpgs.
     ImageFile.MAXBLOCK = 2 * (max(image.size) ** 2)
-    pos = (left, top)
+
+    # Padding.
+    if padding and to_width and to_height:
+        from_ratio = float(from_width) / from_height
+        to_ratio = float(to_width) / to_height
+        pad_size = None
+        if to_ratio < from_ratio:
+            pad_height = int(to_height * (float(from_width) / to_width))
+            pad_size = (from_width, pad_height)
+            pad_top = (pad_height - from_height) // 2
+            pad_left = 0
+        elif to_ratio > from_ratio:
+            pad_width = int(to_width * (float(from_height) / to_height))
+            pad_size = (pad_width, from_height)
+            pad_top = 0
+            pad_left = (pad_width - from_width) // 2
+        if pad_size is not None:
+            pad_container = Image.new("RGBA", pad_size, padding_color)
+            pad_container.paste(image, (pad_left, pad_top))
+            image = pad_container
+
+    # Create the thumbnail.
+    to_size = (to_width, to_height)
+    to_pos = (left, top)
     try:
-        image = ImageOps.fit(image, (width, height), Image.ANTIALIAS, 0, pos)
+        image = ImageOps.fit(image, to_size, Image.ANTIALIAS, 0, to_pos)
         image = image.save(thumb_path, filetype, quality=quality, **image_info)
         # Push a remote copy of the thumbnail if MEDIA_URL is
         # absolute.
         if "://" in settings.MEDIA_URL:
-            with open(thumb_path, "r") as f:
+            with open(thumb_path, "rb") as f:
                 default_storage.save(thumb_url, File(f))
     except Exception:
         # If an error occurred, a corrupted image may have been saved,
@@ -375,6 +398,10 @@ def editable_loader(context):
     if settings.INLINE_EDITING_ENABLED and context["has_site_permission"]:
         t = get_template("includes/editable_toolbar.html")
         context["REDIRECT_FIELD_NAME"] = REDIRECT_FIELD_NAME
+        try:
+            context["editable_obj"]
+        except KeyError:
+            context["editable_obj"] = context.get("page", None)
         context["toolbar"] = t.render(Context(context))
         context["richtext_media"] = RichTextField().formfield().widget.media
     return context
@@ -428,6 +455,9 @@ def editable(parsed, context, token):
         attr = field.pop()
         while field:
             obj = getattr(obj, field.pop(0))
+            if callable(obj):
+                # Allows {% editable page.get_content_model.content %}
+                obj = obj()
         return obj, attr
 
     fields = [parse_field(f) for f in token.split_contents()[1:]]
@@ -557,7 +587,7 @@ def admin_app_list(request):
         })
 
     app_list = list(app_dict.values())
-    sort = lambda x: x["name"] if x["index"] is None else x["index"]
+    sort = lambda x: (x["index"] if x["index"] is not None else 999, x["name"])
     for app in app_list:
         app["models"].sort(key=sort)
     app_list.sort(key=sort)
@@ -612,3 +642,33 @@ def dashboard_column(context, token):
         t = Template("{%% load %s %%}{%% %s %%}" % tuple(tag.split(".")))
         output.append(t.render(Context(context)))
     return "".join(output)
+
+
+@register.simple_tag(takes_context=True)
+def translate_url(context, language):
+    """
+    Translates the current URL for the given language code, eg:
+
+        {% translate_url de %}
+    """
+    try:
+        request = context["request"]
+    except KeyError:
+        return ""
+    view = resolve(request.path)
+    current_language = translation.get_language()
+    translation.activate(language)
+    try:
+        url = reverse(view.func, args=view.args, kwargs=view.kwargs)
+    except NoReverseMatch:
+        try:
+            url_name = (view.url_name if not view.namespace
+                        else '%s:%s' % (view.namespace, view.url_name))
+            url = reverse(url_name, args=view.args, kwargs=view.kwargs)
+        except NoReverseMatch:
+            url_name = "admin:" + view.url_name
+            url = reverse(url_name, args=view.args, kwargs=view.kwargs)
+    translation.activate(current_language)
+    if context['request'].META["QUERY_STRING"]:
+        url += "?" + context['request'].META["QUERY_STRING"]
+    return url

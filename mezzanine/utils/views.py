@@ -47,7 +47,7 @@ def ip_for_request(request):
     header, since app will generally be behind a public web server.
     """
     meta = request.META
-    return meta.get("HTTP_X_FORWARDED_FOR", meta["REMOTE_ADDR"])
+    return meta.get("HTTP_X_FORWARDED_FOR", meta["REMOTE_ADDR"]).split(",")[0]
 
 
 def is_spam_akismet(request, form, url):
@@ -174,7 +174,6 @@ def set_cookie(response, name, value, expiry_seconds=None, secure=False):
     expires = datetime.strftime(datetime.utcnow() +
                                 timedelta(seconds=expiry_seconds),
                                 "%a, %d-%b-%Y %H:%M:%S GMT")
-    value = value.encode("utf-8")
     # Django doesn't seem to support unicode cookie keys correctly on
     # Python 2. Work around by encoding it. See
     # https://code.djangoproject.com/ticket/19802

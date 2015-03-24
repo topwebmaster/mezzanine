@@ -14,15 +14,19 @@ from mezzanine.pages.models import Page, RichTextPage, Link
 from mezzanine.utils.urls import admin_url
 
 
+# Add extra fields for pages to the Displayable fields.
+# We only add the menu field if PAGE_MENU_TEMPLATES has values.
 page_fieldsets = deepcopy(DisplayableAdmin.fieldsets)
-page_fieldsets[0][1]["fields"] += ("in_menus", "login_required",)
+if settings.PAGE_MENU_TEMPLATES:
+    page_fieldsets[0][1]["fields"] += ("in_menus",)
+page_fieldsets[0][1]["fields"] += ("login_required",)
 
 
 class PageAdminForm(DisplayableAdminForm):
 
     def clean_slug(self):
         """
-        Save the old slug to be used later in PageAdmin.model_save()
+        Save the old slug to be used later in PageAdmin.save_model()
         to make the slug change propagate down the page tree.
         """
         self.instance._old_slug = self.instance.slug

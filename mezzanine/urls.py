@@ -50,14 +50,7 @@ if "django.contrib.sitemaps" in settings.INSTALLED_APPS:
 if getattr(settings, "DEBUG", False):
     urlpatterns += patterns("",
         ("^robots.txt$", lambda r: HttpResponse("User-agent: *\nDisallow: /",
-                                                mimetype="text/plain")),
-    )
-
-# Filebrowser admin media library.
-if getattr(settings, "PACKAGE_NAME_FILEBROWSER") in settings.INSTALLED_APPS:
-    urlpatterns += patterns("",
-        ("^admin/media-library/", include("%s.urls" %
-                                        settings.PACKAGE_NAME_FILEBROWSER)),
+                                                content_type="text/plain")),
     )
 
 # Miscellanous Mezzanine patterns.

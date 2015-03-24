@@ -52,6 +52,9 @@ ul, ol {
 .tree .active > a {
   background-color: #EEEEEE;
 }
+.tree .active-branch > a {
+  font-weight: bold;
+}
 .breadcrumb > li + li:before {
   padding: 0 5px 0 10px;
 }
@@ -122,7 +125,10 @@ img.pull-left {
 /*========================================
           MULTI-LEVEL DROP-DOWN NAV
 ==========================================*/
-
+.nav > li > a.dropdown-toggle:hover{
+  background-color: #e7e7e7;
+  color: #555;
+}
 .dropdown-submenu {
   position: relative;
 }
@@ -190,7 +196,10 @@ img.pull-left {
   background-color: #4667A6;
 }
 .share-twitter {
-    background-color: #00A3D4;
+  background-color: #00A3D4;
+}
+.tag-cloud li {
+  padding-left: 0;
 }
 .tag-weight-1 {
   font-size: 90%;
@@ -203,6 +212,9 @@ img.pull-left {
 }
 .tag-weight-4 {
   font-size: 180%;
+}
+.recent-posts img {
+    margin: 2px;
 }
 
 /*========================================

@@ -1,20 +1,21 @@
 from __future__ import unicode_literals
 from future.builtins import str
-from future.utils import native, PY2
+from future.utils import native
 
 from io import BytesIO
 import os
 from string import punctuation
-try:
-    from urllib.parse import unquote
-except ImportError:     # Python 2
-    from urllib import unquote
 from zipfile import ZipFile
 
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.db import models
 from django.utils.encoding import python_2_unicode_compatible
+try:
+    from django.utils.encoding import force_text
+except ImportError:
+    # Django < 1.5
+    from django.utils.encoding import force_unicode as force_text
 from django.utils.translation import ugettext_lazy as _
 
 from mezzanine.conf import settings
@@ -59,28 +60,30 @@ class Gallery(Page, RichText):
         super(Gallery, self).save(*args, **kwargs)
         if self.zip_import:
             zip_file = ZipFile(self.zip_import)
-            # import PIL in either of the two ways it can end up installed.
-            try:
-                from PIL import Image
-            except ImportError:
-                import Image
             for name in zip_file.namelist():
                 data = zip_file.read(name)
                 try:
+                    from PIL import Image
                     image = Image.open(BytesIO(data))
                     image.load()
                     image = Image.open(BytesIO(data))
                     image.verify()
+                except ImportError:
+                    pass
                 except:
                     continue
                 name = os.path.split(name)[1]
                 # This is a way of getting around the broken nature of
                 # os.path.join on Python 2.x. See also the comment below.
-                if PY2:
+                if isinstance(name, bytes):
                     tempname = name.decode('utf-8')
                 else:
                     tempname = name
-                path = os.path.join(GALLERIES_UPLOAD_DIR, self.slug, tempname)
+
+                # A gallery with a slug of "/" tries to extract files
+                # to / on disk; see os.path.join docs.
+                slug = self.slug if self.slug != "/" else ""
+                path = os.path.join(GALLERIES_UPLOAD_DIR, slug, tempname)
                 try:
                     saved_path = default_storage.save(path, ContentFile(data))
                 except UnicodeEncodeError:
@@ -94,7 +97,7 @@ class Gallery(Page, RichText):
                     # mixes byte-strings with unicode strings without
                     # explicit conversion, which raises a TypeError as it
                     # would on Python 3.
-                    path = os.path.join(GALLERIES_UPLOAD_DIR, self.slug,
+                    path = os.path.join(GALLERIES_UPLOAD_DIR, slug,
                                         native(str(name, errors="ignore")))
                     saved_path = default_storage.save(path, ContentFile(data))
                 self.images.add(GalleryImage(file=saved_path))
@@ -125,10 +128,8 @@ class GalleryImage(Orderable):
         file name.
         """
         if not self.id and not self.description:
-            url = self.file.url
-            if PY2:
-                url = str(url, errors="ignore")
-            name = unquote(url).split("/")[-1].rsplit(".", 1)[0]
+            name = force_text(self.file.name)
+            name = name.rsplit("/", 1)[-1].rsplit(".", 1)[0]
             name = name.replace("'", "")
             name = "".join([c if c not in punctuation else " " for c in name])
             # str.title() doesn't deal with unicode very well.
