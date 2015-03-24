@@ -1,6 +1,18 @@
 .. image:: https://secure.travis-ci.org/stephenmcd/mezzanine.png?branch=master
    :target: http://travis-ci.org/#!/stephenmcd/mezzanine
 
+==========
+Инструкция
+==========
+
+Это форк мезанина дла проекта rt.
+Установка пакета через pip:  pip install -e  git+git@bitbucket.org:topwebmaster/mezzanine_rt.git@master#egg=mezzanine_rt
+
+
+
+
+
+
 Created by `Stephen McDonald <http://twitter.com/stephen_mcd>`_
 
 ========
